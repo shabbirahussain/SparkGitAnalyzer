@@ -21,7 +21,6 @@ object Analysis  {
   sc.setLogLevel("ERROR")
   sc.setCheckpointDir("/Users/shabbirhussain/Data/project/temp/")
   sc.setLocalProperty("spark.cleaner.referenceTracking.cleanCheckpoints", "true")
-
   sc.setLocalProperty("spark.checkpoint.compress", "true")
 //  sc.setLocalProperty("spark.rdd.compress", "true")
 
@@ -37,8 +36,6 @@ object Analysis  {
 //    map(_.replaceAll(",null,", "")).
 //    coalesce(1, false).
 //    saveAsTextFile("/Users/shabbirhussain/Data/project/FILE_HASH_HISTORY/1522449220894/", classOf[BZip2Codec])
-
-
 
   val rawData = sqlContext.read.format("csv").
     option("delimiter",",").option("quote","\"").schema(customSchema).
@@ -79,19 +76,11 @@ object Analysis  {
     ).
     filter(!($"O_HEAD_HASH_CODE".isNull && $"O_HEAD_COMMIT_TIME" === $"COMMIT_TIME")). // Ignore immediate moves
     checkpoint(false).
-    persist(StorageLevel.MEMORY_AND_DISK_SER)//checkpoint(true)
+    persist(StorageLevel.MEMORY_AND_DISK_SER)
 
   // Count unique files in the head.
   val (allUniqPathsCount, origUniqPathsCount, copyUniqPathsCount) = {
-
-    /* Special case when two files are together checkedin both unique. So both of them become original. Now one file is deleted and commited again.
-     * This makes this path as copy coz file was deleted and now this path with higher timerstamp gets connected to other original.
-
-    // allData.filter($"GIT_PATH" === "client/node_modules/azure/node_modules/xmlbuilder/lib/XMLBuilder.js").orderBy("COMMIT_TIME").show
-    // orig.filter($"GIT_PATH" === "client/node_modules/azure/node_modules/xmlbuilder/lib/XMLBuilder.js").orderBy("COMMIT_TIME").show
-    // copy.filter($"GIT_PATH" === "client/node_modules/azure/node_modules/xmlbuilder/lib/XMLBuilder.js").orderBy("COMMIT_TIME").take(1)
-    */
-	// all = 16324958, orig = 652394, copy = 15503999
+	  // all = 16324958, orig = 652394, copy = 15503999
     val allUniqPathsCount = allData.
       filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME").       // Head only
       filter($"HASH_CODE".isNotNull).                       // Paths which aren't deleted
@@ -117,7 +106,6 @@ object Analysis  {
         $"O_REPOSITORY".as("REPOSITORY"),
         $"O_GIT_PATH"  .as("GIT_PATH")
       )).count
-
 
   // Obsolete code analysis
   val activeRepoObsoleteCopyCount = {
@@ -178,55 +166,6 @@ object Analysis  {
 
     // Make bloom filter to single out only records which belong to an original repo from which someone copied something.
     val bf = DataFrameUtils.makeBloomFilter(truePathCopy, Seq($"O_REPO_OWNER", $"O_REPOSITORY"), 0.0001)
-
-
-    /* Turns out datatype conversion is worse than a join
-    val allCopyPathsXRepo = headCopy.
-      withColumn("crc32(HASH_CODE)" , crc32($"HASH_CODE")).
-      // Avoid self joining by localized group self join.
-      groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME").
-      agg(collect_list(struct($"GIT_PATH", $"O_REPO_OWNER", $"O_REPOSITORY", $"O_GIT_PATH", $"O_COMMIT_TIME", $"crc32(HASH_CODE)"))).
-      rdd.flatMap(y=> {
-        val repoOwner  = y.getAs[String]("REPO_OWNER")
-        val repository = y.getAs[String]("REPOSITORY")
-        val commitTime = y.getAs[Long]("COMMIT_TIME")
-
-        val lst = y.getSeq[Row](3)
-        val candidateOrig = lst.
-          filter(r=> (r.getAs[String]("O_REPO_OWNER") != repoOwner) || (r.getAs[String]("O_REPOSITORY") != repository)).
-          filter(r=> r.getAs[String]("GIT_PATH").endsWith(r.getAs[String]("O_GIT_PATH"))).
-          map(r=> {
-            val gitPath   = r.getAs[String]("GIT_PATH")
-            val oGitPath  = r.getAs[String]("O_GIT_PATH")
-            val gitPathPrefix = gitPath.substring(0, gitPath.length - oGitPath.length)
-            (gitPathPrefix, r.getAs[String]("O_REPO_OWNER"), r.getAs[String]("O_REPOSITORY"), r.getAs[Long]("O_COMMIT_TIME"))
-          }).
-          groupBy(x=> (x._1, x._2, x._3)).mapValues(_.maxBy(_._4)).values
-
-        lst.flatMap(r=> {
-          val gitPath = r.getAs[String]("GIT_PATH")
-          val crc32HashCode = r.getAs[Long]("crc32(HASH_CODE)")
-          candidateOrig.
-            filter(o=> gitPath.startsWith(o._1)).
-            map(o=> {
-            (repoOwner, repository, gitPath, commitTime, o._1, o._2, o._3, o._4, crc32HashCode)
-          })
-        })
-      }).
-      toDF("REPO_OWNER", "REPOSITORY", "GIT_PATH", "COMMIT_TIME", "GIT_PATH_PREFIX", "O_REPO_OWNER", "O_REPOSITORY", "max(O_COMMIT_TIME)", "crc32(HASH_CODE)").
-      withColumn("O_GIT_PATH", $"GIT_PATH".substr(length($"GIT_PATH_PREFIX") + 1, lit(100000))).
-      withColumn("crc32(O_GIT_PATH)", crc32($"O_GIT_PATH")).
-      // Extract first level folder to aggregate repository.
-      withColumn("O_FOLDER", extractLevel1Folder($"O_GIT_PATH")).
-      groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "GIT_PATH_PREFIX", "O_REPO_OWNER", "O_REPOSITORY", "max(O_COMMIT_TIME)", "O_FOLDER").
-      agg(sum("crc32(HASH_CODE)"), sum("crc32(O_GIT_PATH)"), count("O_GIT_PATH")).
-      persist(StorageLevel.MEMORY_AND_DISK_SER)
-
-
-    // Make bloom filter to single out only records which belong to an original repo from which someone copied something.
-    val bf = makeBloomFilter(allCopyPathsXRepo, Seq($"O_REPO_OWNER", $"O_REPOSITORY"), 0.0001)
-    */
-
 
     // Get all the paths fingerprint present in the all repo upto a max(original commit point) used by the copier.
     @transient val w1 = Window.partitionBy("REPO_OWNER", "REPOSITORY", "FOLDER").orderBy($"COMMIT_TIME")

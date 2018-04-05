@@ -1,7 +1,7 @@
 
 SPARK_BIN_PATH=/Users/shabbirhussain/Apps/spark-2.2.1-bin-hadoop2.7/bin/
 SCALA_BIN_PATH=/usr/local/Cellar/scala@2.11/2.11.11/bin/
-RUNTIME_JARS=commons-csv-1.5.jar,json-20180130.jar,mysql-connector-java-8.0.9-rc.jar,org.eclipse.jgit-4.8.0.201706111038-r.jar,jsch-0.1.54.jar,config-1.3.3.jar,akka-actor_2.11-2.5.11.jar,akka-stream-experimental_2.11-2.0.5.jar,reactive-streams-1.0.2.jar
+RUNTIME_JARS=commons-csv-1.5.jar
 
 # ------------------------------------
 # Do not edit! Local config variables.
