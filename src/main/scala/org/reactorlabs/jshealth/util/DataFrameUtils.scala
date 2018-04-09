@@ -5,7 +5,7 @@ import org.apache.spark.sql.{Column, DataFrame}
 import org.apache.spark.sql.functions.approx_count_distinct
 import org.apache.spark.storage.StorageLevel
 
-object DataFrameUtils {
+object DataFrameUtils extends Serializable {
   /** Generates a seq of bloom filters for the columns specified.
     *
     * @param dataFrame is the input dataframe to process.

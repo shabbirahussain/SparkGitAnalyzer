@@ -1,6 +1,6 @@
 
-SPARK_BIN_PATH=/Users/shabbirhussain/Apps/spark-2.2.1-bin-hadoop2.7/bin/
-SCALA_BIN_PATH=/usr/local/Cellar/scala@2.11/2.11.11/bin/
+SPARK_BIN_PATH=
+SCALA_BIN_PATH=
 RUNTIME_JARS=commons-csv-1.5.jar
 
 # ------------------------------------
@@ -35,7 +35,7 @@ run:
 	 	--jars "${FULL_RUNTIME_JARS}" \
     	--class org.reactorlabs.jshealth.Main "${JAR_NAME}"
 ss:
-	${SPARK_BIN_PATH}/spark-shell --driver-memory 7G --executor-memory 7G --executor-cores 3 \
+	${SPARK_BIN_PATH}spark-shell --driver-memory 7G --executor-memory 7G --executor-cores 3 \
 	--jars=${FULL_RUNTIME_JARS} \
 	--conf spark.checkpoint.compress=true
 

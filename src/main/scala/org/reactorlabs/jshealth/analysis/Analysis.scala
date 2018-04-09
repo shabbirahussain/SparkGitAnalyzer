@@ -22,7 +22,7 @@ object Analysis  {
   sc.setCheckpointDir("/Users/shabbirhussain/Data/project/temp/")
   sc.setLocalProperty("spark.cleaner.referenceTracking.cleanCheckpoints", "true")
   sc.setLocalProperty("spark.checkpoint.compress", "true")
-//  sc.setLocalProperty("spark.rdd.compress", "true")
+  sc.setLocalProperty("spark.rdd.compress", "true")
 
   val customSchema = StructType(Array(
     StructField("REPO_OWNER",   StringType, nullable = false),
@@ -40,7 +40,7 @@ object Analysis  {
   val rawData = sqlContext.read.format("csv").
     option("delimiter",",").option("quote","\"").schema(customSchema).
 //    load("s3://shabbirhussain/FILE_HASH_HISTORY/*/*/").
-    load("/Users/shabbirhussain/Google Drive/NEU/Notes/CS 8678 Project/Déjà vu Episode II - Attack of The Clones/Data/FILE_HASH_HISTORY/First10K/*/").
+    load("/Users/shabbirhussain/Google Drive/NEU/Notes/CS 8678 Project/Déjà vu Episode II - Attack of The Clones/Data/FILE_HASH_HISTORY/*/*/").
     distinct
 
   val allData = rawData.
@@ -75,12 +75,12 @@ object Analysis  {
       $"GIT_PATH"   =!= $"O_GIT_PATH"
     ).
     filter(!($"O_HEAD_HASH_CODE".isNull && $"O_HEAD_COMMIT_TIME" === $"COMMIT_TIME")). // Ignore immediate moves
-    checkpoint(false).
+    //checkpoint(false).
     persist(StorageLevel.MEMORY_AND_DISK_SER)
 
   // Count unique files in the head.
+  // all = 16324958, orig = 652394, copy = 15503999
   val (allUniqPathsCount, origUniqPathsCount, copyUniqPathsCount) = {
-	  // all = 16324958, orig = 652394, copy = 15503999
     val allUniqPathsCount = allData.
       filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME").       // Head only
       filter($"HASH_CODE".isNotNull).                       // Paths which aren't deleted
@@ -134,38 +134,26 @@ object Analysis  {
 
   // Copy as Import
   val copyAsImportCount = {
-    val extractLevel1Folder = udf[String, String]((s: String) => {
-      val temp = s.split("/"); if (temp.length == 1) "" else temp(0);
+    val extractLastFolder = udf[String, String]((s: String) => {
+      s.replaceAll("""[^/]*$""", "")
     })
+    // Make bloom filter to single out only records which belong to an original repo from which someone copied something.
+    val bf = DataFrameUtils.makeBloomFilter(copy, Seq($"O_REPO_OWNER", $"O_REPOSITORY"), 0.0001)
 
     val headCopy = copy.filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME") // Pick head paths only.
-
-    // Copy path resembles original path
-    val truePathCopy = headCopy.
-      filter($"REPO_OWNER" =!= $"O_REPO_OWNER" || $"REPOSITORY" =!= $"O_REPOSITORY"). // They should have a different repo to compare
-      filter($"GIT_PATH".contains($"O_GIT_PATH")).
-      withColumn("GIT_PATH_PREFIX", $"GIT_PATH".substr(lit(0), length($"GIT_PATH") - length($"O_GIT_PATH"))).
-      groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "GIT_PATH_PREFIX", "O_REPO_OWNER", "O_REPOSITORY").
-      agg(max($"O_COMMIT_TIME")).
-      persist(StorageLevel.MEMORY_AND_DISK_SER)
-
     // Cross join all paths fingerprint within a copied folder with all the orig repos form that contributed to this folder.
     val allCopyPathsXRepo = headCopy.
       select("REPO_OWNER", "REPOSITORY", "GIT_PATH", "COMMIT_TIME", "HASH_CODE").
       withColumn("crc32(HASH_CODE)", crc32($"HASH_CODE")).drop("HASH_CODE").
-      distinct. // Using distinct as multiple originals can be present as 2 copies committed simultaneously
-      join(truePathCopy, usingColumns = Seq("REPO_OWNER", "REPOSITORY", "COMMIT_TIME")).
-      filter($"GIT_PATH".startsWith($"GIT_PATH_PREFIX")).
-      withColumn("O_GIT_PATH", $"GIT_PATH".substr(length($"GIT_PATH_PREFIX") + 1, lit(100000))).drop("GIT_PATH").
-      withColumn("crc32(O_GIT_PATH)", crc32($"O_GIT_PATH")).
-      // Extract first level folder to aggregate repository.
-      withColumn("O_FOLDER", extractLevel1Folder($"O_GIT_PATH")).
-      groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "GIT_PATH_PREFIX", "O_REPO_OWNER", "O_REPOSITORY", "max(O_COMMIT_TIME)", "O_FOLDER").
-      agg(sum("crc32(HASH_CODE)"), sum("crc32(O_GIT_PATH)"), count("O_GIT_PATH")).
-      checkpoint(true)
+      distinct.
+      // Extract last level folder to aggregate repository.
+      withColumn("FOLDER", extractLastFolder($"GIT_PATH")).
+      withColumn("FILE_NAME", $"GIT_PATH".substr(length($"FOLDER") + 1, lit(100000))).//drop("GIT_PATH").
+      withColumn("crc32(FILE_NAME)", crc32($"FILE_NAME")).
+      groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "FOLDER").
+      agg(sum("crc32(HASH_CODE)"), sum("crc32(FILE_NAME)"), count("FILE_NAME"))
+      //.persist(StorageLevel.MEMORY_AND_DISK_SER)
 
-    // Make bloom filter to single out only records which belong to an original repo from which someone copied something.
-    val bf = DataFrameUtils.makeBloomFilter(truePathCopy, Seq($"O_REPO_OWNER", $"O_REPOSITORY"), 0.0001)
 
     // Get all the paths fingerprint present in the all repo upto a max(original commit point) used by the copier.
     @transient val w1 = Window.partitionBy("REPO_OWNER", "REPOSITORY", "FOLDER").orderBy($"COMMIT_TIME")
@@ -173,9 +161,10 @@ object Analysis  {
       // Filter extra data with bloom filters
       filter(x=> bf(0).contains(x.getString(0)) && bf(1).contains(x.getString(1))).
       // Extract first level folder to aggregate repository.
-      withColumn("FOLDER", extractLevel1Folder($"GIT_PATH")).
+      withColumn("FOLDER", extractLastFolder($"GIT_PATH")).
+      withColumn("FILE_NAME", $"GIT_PATH".substr(length($"FOLDER") + 1, lit(100000))).
+      withColumn("crc32(FILE_NAME)", crc32($"FILE_NAME")).
       // Create checksums of required columns.
-      withColumn("crc32(GIT_PATH)" , crc32($"GIT_PATH")).
       withColumn("crc32(HASH_CODE)", crc32($"HASH_CODE")).
       withColumn("crc32(PREV_HASH_CODE)", lag("crc32(HASH_CODE)", 1).
         over(Window.partitionBy("REPO_OWNER", "REPOSITORY", "GIT_PATH").orderBy($"COMMIT_TIME"))).
@@ -186,21 +175,25 @@ object Analysis  {
       withColumn("crc32(HASH_CODE)"     , when($"IS_DELETION", 0).otherwise($"crc32(HASH_CODE)")).
       withColumn("crc32(PREV_HASH_CODE)", when($"IS_ADDITION", 0).otherwise($"crc32(PREV_HASH_CODE)")).
       // Overcome double counting for the same path. This way we are only considering new additions.
-      withColumn("crc32(GIT_PATH)",
-        when($"IS_ADDITION",  $"crc32(GIT_PATH)").
-        when($"IS_DELETION", -$"crc32(GIT_PATH)").
+      withColumn("crc32(FILE_NAME)",
+        when($"IS_ADDITION",  $"crc32(FILE_NAME)").
+        when($"IS_DELETION", -$"crc32(FILE_NAME)").
         otherwise(0)).
       withColumn("crc32(HASH_CODE)", $"crc32(HASH_CODE)" - $"crc32(PREV_HASH_CODE)").
       // Fingerprint all additions in a commit for every first level folder.
       groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "FOLDER").
-      agg(sum($"crc32(GIT_PATH)"), sum($"crc32(HASH_CODE)"), sum(signum($"crc32(GIT_PATH)"))).
+      agg(sum($"crc32(HASH_CODE)"), sum($"crc32(FILE_NAME)"), sum(signum($"crc32(FILE_NAME)"))).
       // Do cumulative sum of fingerprints.
       select(
         $"REPO_OWNER", $"REPOSITORY", $"COMMIT_TIME", $"FOLDER",
-        sum($"sum(crc32(GIT_PATH))")        .over(w1).as("sum(crc32(GIT_PATH))"),
-        sum($"sum(crc32(HASH_CODE))")       .over(w1).as("sum(crc32(HASH_CODE))"),
-        sum($"sum(signum(crc32(GIT_PATH)))").over(w1).as("sum(count(GIT_PATH))")
-      )
+        sum($"sum(crc32(HASH_CODE))").over(w1).as("sum(crc32(HASH_CODE))"),
+        sum($"sum(crc32(FILE_NAME))").over(w1).as("sum(crc32(FILE_NAME))"),
+        sum($"sum(signum(crc32(FILE_NAME)))").over(w1).as("sum(count(FILE_NAME))")
+      ).
+      filter($"sum(count(FILE_NAME))" > 0).
+      groupBy("REPO_OWNER", "REPOSITORY", "FOLDER", "sum(crc32(HASH_CODE))", "sum(crc32(FILE_NAME))", "sum(count(FILE_NAME))").
+      agg(min($"COMMIT_TIME").as("COMMIT_TIME"))
+      //.persist(StorageLevel.MEMORY_AND_DISK_SER)
 
 
     // Do join to find if all the paths from original at the time of copy exists in the copied folder.
@@ -212,33 +205,59 @@ object Analysis  {
           $"COMMIT_TIME".as("O_COMMIT_TIME"),
           $"FOLDER".as("O_FOLDER"),
           $"sum(crc32(HASH_CODE))",
-          $"sum(crc32(GIT_PATH))" .as("sum(crc32(O_GIT_PATH))"),
-          $"sum(count(GIT_PATH))" .as("count(O_GIT_PATH)")
+          $"sum(crc32(FILE_NAME))",
+          $"sum(count(FILE_NAME))".as("count(FILE_NAME)")
         ),
-        usingColumns = Seq("O_REPO_OWNER", "O_REPOSITORY", "O_FOLDER", "sum(crc32(O_GIT_PATH))", "sum(crc32(HASH_CODE))", "count(O_GIT_PATH)")).
-      filter($"max(O_COMMIT_TIME)" <= $"O_COMMIT_TIME").
-      select("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "GIT_PATH_PREFIX", "O_REPO_OWNER", "O_REPOSITORY", "count(O_GIT_PATH)").distinct.
-      checkpoint(true)
+        usingColumns = Seq("sum(crc32(HASH_CODE))", "sum(crc32(FILE_NAME))", "count(FILE_NAME)")).
+      filter($"COMMIT_TIME" > $"O_COMMIT_TIME").
+      filter($"REPO_OWNER" =!= $"O_REPO_OWNER" || $"REPOSITORY" =!= $"O_REPOSITORY").
+      groupBy("REPO_OWNER", "REPOSITORY", "FOLDER", "sum(crc32(HASH_CODE))", "sum(crc32(FILE_NAME))", "count(FILE_NAME)").
+      agg(first($"O_COMMIT_TIME"), first($"O_REPO_OWNER"), first("O_REPOSITORY"), first($"O_FOLDER")).
+      drop("sum(crc32(HASH_CODE))", "sum(crc32(FILE_NAME))")
+      //.checkpoint(true)
 
 
 	  // res = 3380348
     // TODO: What should we consider that path if it belongs to copy as import and then changed to something else?
-    val copyAsImportCount = copyAsImportExamples.agg(sum("count(O_GIT_PATH)")).collect
+    val copyAsImportCount = copyAsImportExamples.
+      select("REPO_OWNER", "REPOSITORY", "FOLDER", "count(FILE_NAME)").distinct.
+      withColumn("IS_NODE_MODULE", $"FOLDER".contains("node_modules/")).
+      groupBy("IS_NODE_MODULE").agg(sum("count(FILE_NAME)")).collect
 
 
-    val unidentifiedNodeCopiesCount = copy.filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME"). // Pick head paths only.
-      filter(length($"GIT_PATH") > length($"O_GIT_PATH")).
+    copyAsImportExamples.filter(!$"FOLDER".contains("node_modules/")).
+      rdd.map(x=> x.mkString(",")).
+      coalesce(1).saveAsTextFile("/Users/shabbirhussain/Data/project/mysql-2018-02-01/report/copyAsImportExamples")
+
+
+    val unidentifiedNodeCopies = headCopy. // Pick head paths only.
       filter($"GIT_PATH".contains("node_modules/")).
-      filter($"GIT_PATH".contains($"O_GIT_PATH")).
       select("REPO_OWNER", "REPOSITORY", "GIT_PATH").distinct.
       join(copyAsImportExamples.select("REPO_OWNER", "REPOSITORY").distinct.withColumn("JNK", lit(true)),
         usingColumns = Seq("REPO_OWNER", "REPOSITORY"),
         joinType = "LEFT_OUTER").
-      filter($"JNK".isNull).count
-      
-    copy.filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME"). // Pick head paths only.
-      filter($"GIT_PATH".contains("node_modules/")).
-      select("REPO_OWNER", "REPOSITORY", "GIT_PATH").distinct.count
+      filter($"JNK".isNull).
+      persist(StorageLevel.MEMORY_AND_DISK_SER)
+    val unidentifiedNodeCopiesCnt  =  unidentifiedNodeCopies.count
+
+
+
+
+    copyAsImportExamples.filter(!$"IS_NODE_MODULE" && $"count(FILE_NAME)" > 1).show
+
+
+
+    headCopy.filter($"REPO_OWNER" === "paulmillr" && $"REPOSITORY" === "es6-shim").show
+    allCopyPathsXRepo.filter($"REPO_OWNER" === "paulmillr" && $"REPOSITORY" === "es6-shim" && $"FOLDER" === "node_modules/chai/").show
+    allJSFilesAtTimeOfCopyFromSrc.filter($"REPO_OWNER" === "chaijs" && $"REPOSITORY" === "chai" && $"FOLDER" === "").show
+
+    headCopy.filter($"REPO_OWNER" === "paulmillr" && $"REPOSITORY" === "es6-shim" && $"GIT_PATH".startsWith("node_modules/chai/")).show
+    allJSFilesAtTimeOfCopyFromSrc.filter($"REPO_OWNER" === "chaijs" && $"REPOSITORY" === "chai" && $"FOLDER" === "" && $"COMMIT_TIME" === "1453982071").show
+
+
+    allData.filter($"REPO_OWNER" === "chaijs" && $"REPOSITORY" === "chai" && $"COMMIT_TIME" <= "1453982071" && !$"GIT_PATH".contains("/")).
+      orderBy($"GIT_PATH", $"COMMIT_TIME").
+      show(1000)
 
     copyAsImportCount
     }
