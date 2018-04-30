@@ -4,6 +4,7 @@ import java.util.{Date, Properties}
 import java.sql.DriverManager
 import java.sql.Connection
 
+import org.apache.hadoop.fs.FileSystem
 import org.apache.log4j.Logger
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.{SQLContext, SparkSession}
@@ -38,7 +39,6 @@ object Main extends Serializable {
   val sc: SparkContext = spark.sparkContext
   sc.setLogLevel("WARN")
   sc.setCheckpointDir("target/temp/spark/")
-
   val sqlContext: SQLContext = spark.sqlContext
 
 

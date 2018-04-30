@@ -1,7 +1,8 @@
 
-SPARK_BIN_PATH=
 SCALA_BIN_PATH=
+SPARK_BIN_PATH=
 RUNTIME_JARS=commons-csv-1.5.jar
+
 
 # ------------------------------------
 # Do not edit! Local config variables.
@@ -37,7 +38,9 @@ run:
 ss:
 	${SPARK_BIN_PATH}spark-shell --driver-memory 7G --executor-memory 7G --executor-cores 3 \
 	--jars=${FULL_RUNTIME_JARS} \
-	--conf spark.checkpoint.compress=true
+	--conf spark.scheduler.mode=FAIR \
+	--conf spark.checkpoint.compress=true \
+	--conf spark.ui.showConsoleProgress=false
 
 aws_ss:
 	spark-shell --driver-memory 5G --executor-memory 5G \
