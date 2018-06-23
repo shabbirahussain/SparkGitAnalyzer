@@ -33,10 +33,12 @@ package object util {
   }
 
   def read(path: String, split: Schemas.Value): DataFrame = {
+    val fullPath = "%s/data/*/%s/".format(path, split)
+    println(fullPath)
     val meta = Schemas.asMap(key = split)
     sqlContext.read
       .schema(meta._1)
-      .load("%s/data/*/%s/".format(path, split))
+      .load(fullPath)
       .dropDuplicates(meta._2)
   }
 }

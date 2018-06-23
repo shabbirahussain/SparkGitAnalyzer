@@ -31,12 +31,12 @@ object Analysis  {
   val getFileName = udf[String, String]((s: String) => Paths.get(s).getFileName.toString)
 
   // Make bloom filter to single out only records which belong to an original repo from which someone copied something.
-  val bf = headCopy.makeBloomFilter(Seq($"O_REPO_OWNER", $"O_REPOSITORY"), 0.0001)
+  val allFolderHashBF = headCopy.makeBloomFilter(Seq($"O_REPO_OWNER", $"O_REPOSITORY"), 0.0001)
   @transient val wRepoFolderTimeAsc = Window.partitionBy("REPO_OWNER", "REPOSITORY", "FOLDER").orderBy($"COMMIT_TIME")
   // Get all the paths fingerprint present in the all repo upto a max(original commit point) used by the copier.
   val allFolderHash = allData.
     // Filter extra data with bloom filters
-    filter(x=> bf(0).contains(x.getString(0)) && bf(1).contains(x.getString(1))).
+    filter(x=> allFolderHashBF(0).contains(x.getString(0)) && allFolderHashBF(1).contains(x.getString(1))).
     // Extract first level folder to aggregate repository.
     withColumn("FOLDER", getParentFileName($"GIT_PATH")).
     withColumn("crc32(FILE_NAME)", crc32(getFileName($"GIT_PATH"))).
@@ -84,35 +84,6 @@ object Analysis  {
   // Do join to find if all the paths from original at the time of copy exists in the copied folder.
   val bloomFilters = (0 until 2).map(_=> BloomFilter.optimallySized[String](copyFolderHash.count(), falsePositiveRate = 0.0001))
   val isFirstOfItsName = udf((e: String) => bloomFilters.filter(!_.contains(e)).take(1).map(_+=e).nonEmpty)
-
-  val copyAsImportExamples1 = copyFolderHash.as("A").limit(1000).
-    repartition($"REPO_OWNER", $"REPOSITORY", $"FOLDER", $"COMMIT_TIME").
-    join(allFolderHash.as("B").
-      select(
-        $"REPO_OWNER" .as("O_REPO_OWNER"),
-        $"REPOSITORY" .as("O_REPOSITORY"),
-        $"COMMIT_TIME".as("O_COMMIT_TIME"),
-        $"FOLDER".as("O_FOLDER"),
-        $"sum(crc32(HASH_CODE))",
-        $"sum(crc32(FILE_NAME))",
-        $"count(crc32(FILE_NAME))"
-      )
-      , joinType = "LEFT_OUTER"
-      , joinExprs = when(
-        $"A.sum(crc32(HASH_CODE))" === $"B.sum(crc32(HASH_CODE))" &&
-          $"A.sum(crc32(FILE_NAME))"   === $"B.sum(crc32(FILE_NAME))" &&
-          $"A.count(crc32(FILE_NAME))" === $"B.count(crc32(FILE_NAME))" &&
-          $"COMMIT_TIME" > $"O_COMMIT_TIME" &&
-          ($"REPO_OWNER" =!= $"O_REPO_OWNER" || $"REPOSITORY" =!= $"O_REPOSITORY")
-        , isFirstOfItsName(concat($"REPO_OWNER", $"REPOSITORY", $"FOLDER", $"COMMIT_TIME")))
-    ).
-    select("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "FOLDER", "O_REPO_OWNER", "O_REPOSITORY", "O_FOLDER", "A.count(crc32(FILE_NAME))", "O_COMMIT_TIME").
-    checkpoint("copyAsImportExamples_tmp").
-    groupBy("REPO_OWNER", "REPOSITORY", "FOLDER", "count(crc32(FILE_NAME))").
-    agg(first($"O_COMMIT_TIME"), first($"O_REPO_OWNER"), first("O_REPOSITORY"), first($"O_FOLDER")).
-    checkpoint("copyAsImportExamples1")
-
-
   val copyAsImportExamples =
     copyFolderHash.as("A").
       repartition($"REPO_OWNER", $"REPOSITORY", $"FOLDER", $"COMMIT_TIME").
