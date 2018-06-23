@@ -1,6 +1,7 @@
 
 import java.nio.file.Paths
 import breeze.util.BloomFilter
+import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.storage.StorageLevel
@@ -40,3 +41,30 @@ val allData = read(fileStorePath, Schemas.FILE_METADATA).
   repartition(1024).
   checkpoint("allData").
   persist(StorageLevel.MEMORY_ONLY_SER)
+
+val orig = allData.
+  filter($"HASH_CODE".isNotNull && $"COMMIT_TIME" === $"O_COMMIT_TIME").
+  select($"O_REPO_OWNER",
+    $"O_REPOSITORY",
+    $"O_GIT_PATH",
+    $"O_COMMIT_TIME",
+    $"HASH_CODE",
+    $"O_HEAD_COMMIT_TIME",
+    $"O_HEAD_HASH_CODE",
+    $"IS_UNIQUE"
+  ).distinct() // In case 2 orig files are committed at different paths in the same commit.
+
+// List all the copied content (hash equal).
+val copy = allData.drop("IS_UNIQUE").
+  filter($"HASH_CODE".isNotNull  && $"COMMIT_TIME" =!= $"O_COMMIT_TIME").
+  filter(
+    $"REPO_OWNER" =!= $"O_REPO_OWNER" ||
+      $"REPOSITORY" =!= $"O_REPOSITORY" ||
+      $"GIT_PATH"   =!= $"O_GIT_PATH"
+  ). // Prevent file revert getting detected as copy
+  filter(!($"O_HEAD_HASH_CODE".isNull && $"O_HEAD_COMMIT_TIME" === $"COMMIT_TIME")) // Ignore immediate moves
+val headCopy = copy.filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME")
+
+allData.describe()
+orig.describe()
+copy.describe()

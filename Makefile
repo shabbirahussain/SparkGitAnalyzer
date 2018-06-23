@@ -6,7 +6,7 @@ RUNTIME_JARS=commons-csv-1.5.jar
 JAR_NAME=target/artifacts/task.jar
 LIB_PATH=target/dependency
 AWS_DIR=target/aws
-STARTUP_FILE=src/main/resources/Startup.scala
+STARTUP_FILE=src/main/scala/org/reactorlabs/jshealth/analysis/queries/__init__.scala
 
 COMMA=,
 FULL_RUNTIME_JARS=${LIB_PATH}/$(subst ${COMMA},${COMMA}${LIB_PATH}/,${RUNTIME_JARS}),${JAR_NAME}
@@ -34,7 +34,7 @@ ss:
 		--jars=${FULL_RUNTIME_JARS} \
 		--conf spark.scheduler.mode=FAIR \
 		--conf spark.checkpoint.compress=true \
-		--conf spark.ui.showConsoleProgress=false
+		--conf spark.ui.showConsoleProgress=true
 
 install_deps:
 	mvn install dependency:copy-dependencies

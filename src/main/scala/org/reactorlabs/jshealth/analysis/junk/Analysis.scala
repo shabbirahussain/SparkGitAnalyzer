@@ -16,40 +16,20 @@ import org.reactorlabs.jshealth.Main._
 import sqlContext.implicits._
 
 object Analysis  {
+  // Following stub definitions are loaded from startup script located in resources.
   val allData: DataFrame = _
-
-  // List all min timestamp commit per hash.
-  val orig = allData.
-      filter($"HASH_CODE".isNotNull && $"COMMIT_TIME" === $"O_COMMIT_TIME").
-      select($"O_REPO_OWNER",
-        $"O_REPOSITORY",
-        $"O_GIT_PATH",
-        $"O_COMMIT_TIME",
-        $"HASH_CODE",
-        $"O_HEAD_COMMIT_TIME",
-        $"O_HEAD_HASH_CODE",
-        $"IS_UNIQUE"
-      ).distinct() // In case 2 orig files are committed at different paths in the same commit.
-
-  // List all the copied content (hash equal).
-  val copy = allData.drop("IS_UNIQUE").
-    filter($"HASH_CODE".isNotNull  && $"COMMIT_TIME" =!= $"O_COMMIT_TIME").
-    filter(
-      $"REPO_OWNER" =!= $"O_REPO_OWNER" ||
-      $"REPOSITORY" =!= $"O_REPOSITORY" ||
-      $"GIT_PATH"   =!= $"O_GIT_PATH"
-    ). // Prevent file revert getting detected as copy
-    filter(!($"O_HEAD_HASH_CODE".isNull && $"O_HEAD_COMMIT_TIME" === $"COMMIT_TIME")) // Ignore immediate moves
-
+  val orig: DataFrame = _
+  val copy: DataFrame = _
+  val headCopy: DataFrame = _
 
   // Copy as Import
-  val getParentFileName = udf[String, String]((s: String) => Paths.get(s).getParent match {
+  val getParentFileName = udf[String, String]((s: String) =>
+    Paths.get(s).getParent match {
       case null => ""
       case e@_ => e.toString
     })
   val getFileName = udf[String, String]((s: String) => Paths.get(s).getFileName.toString)
 
-  val headCopy = copy.filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME")
   // Make bloom filter to single out only records which belong to an original repo from which someone copied something.
   val bf = headCopy.makeBloomFilter(Seq($"O_REPO_OWNER", $"O_REPOSITORY"), 0.0001)
   @transient val wRepoFolderTimeAsc = Window.partitionBy("REPO_OWNER", "REPOSITORY", "FOLDER").orderBy($"COMMIT_TIME")
@@ -103,13 +83,7 @@ object Analysis  {
 
   // Do join to find if all the paths from original at the time of copy exists in the copied folder.
   val bloomFilters = (0 until 2).map(_=> BloomFilter.optimallySized[String](copyFolderHash.count(), falsePositiveRate = 0.0001))
-  val isFirstOfItsName = udf((e: String) => bloomFilters.
-      filter(!_.contains(e)).
-      take(1).
-      map(_+=e).
-      nonEmpty
-  )
-
+  val isFirstOfItsName = udf((e: String) => bloomFilters.filter(!_.contains(e)).take(1).map(_+=e).nonEmpty)
 
   val copyAsImportExamples1 = copyFolderHash.as("A").limit(1000).
     repartition($"REPO_OWNER", $"REPOSITORY", $"FOLDER", $"COMMIT_TIME").
@@ -138,11 +112,6 @@ object Analysis  {
     agg(first($"O_COMMIT_TIME"), first($"O_REPO_OWNER"), first("O_REPOSITORY"), first($"O_FOLDER")).
     checkpoint("copyAsImportExamples1")
 
-  val df = copyAsImportExamples1
-
-  df.
-    checkpoint("PermName").
-    select()
 
   val copyAsImportExamples =
     copyFolderHash.as("A").
@@ -269,40 +238,9 @@ object Analysis  {
 
 
   ///////////////////////////////////////////////////////////////////////////////////////////////////////
-  // Count unique files in the head.
-  val (allPathsCount, origPathsCount, copyPathsCount) = {
-    val allPathsCount = allData.
-        filter($"HASH_CODE".isNotNull).                       // Paths which aren't deleted
-        filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME").       // Head only
-        select("REPO_OWNER", "REPOSITORY", "GIT_PATH").distinct.count
 
-    val origPathsCount = orig.
-        filter($"O_COMMIT_TIME" === $"O_HEAD_COMMIT_TIME"). // Head only
-        select($"O_REPO_OWNER", $"O_REPOSITORY", $"O_GIT_PATH", $"IS_UNIQUE").distinct.
-        groupBy("IS_UNIQUE").count.collect
-
-    val copyPathsCount = copy.
-        filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME").       // Head only
-        select("REPO_OWNER", "REPOSITORY", "GIT_PATH").distinct.count
-
-    (allPathsCount, origPathsCount, copyPathsCount)
-  }
 
   // Divergent Analysis = 17795
-  val divergentCopyCount = copy.
-    filter($"COMMIT_TIME" =!= $"HEAD_COMMIT_TIME").
-    select("REPO_OWNER", "REPOSITORY", "GIT_PATH").distinct.
-    join(orig.
-      filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME").   // Head only
-      filter($"HASH_CODE".isNotNull).
-      select(
-        $"O_REPO_OWNER".as("REPO_OWNER"),
-        $"O_REPOSITORY".as("REPOSITORY"),
-        $"O_GIT_PATH"  .as("GIT_PATH"),
-        $"IS_UNIQUE"
-      )
-      , usingColumns= Seq("REPO_OWNER", "REPOSITORY", "GIT_PATH")).
-    groupBy("IS_UNIQUE").count.collect
 
 
 //
