@@ -1,14 +1,15 @@
-package org.reactorlabs.jshealth.util
+package org.reactorlabs.jshealth.analysis.junk
 
-import org.reactorlabs.jshealth.Main.{dataStore, spark, sc}
-
-import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{DataFrame, SQLContext}
-import org.apache.spark.sql.functions._
-import java.io.{FileNotFoundException, IOException}
+import java.io.FileNotFoundException
 import java.net.{ConnectException, MalformedURLException, URL}
-import javax.net.ssl.HttpsURLConnection
 import java.util.regex.Pattern
+
+import javax.net.ssl.HttpsURLConnection
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{DataFrame, SQLContext}
+import org.reactorlabs.jshealth.Main.{sc, spark}
+
 import scala.io.Source
 
 /**

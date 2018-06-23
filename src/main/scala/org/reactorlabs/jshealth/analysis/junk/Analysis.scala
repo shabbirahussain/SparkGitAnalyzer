@@ -1,163 +1,22 @@
-package org.reactorlabs.jshealth.analysis
+package org.reactorlabs.jshealth.analysis.junk
 
+import java.nio.file.Paths
 
-import org.reactorlabs.jshealth.Main.{prop, sc, spark}
+import breeze.util.BloomFilter
+import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.functions._
+import org.apache.spark.storage.StorageLevel
+import org.reactorlabs.jshealth.models._
+import org.reactorlabs.jshealth.util.DataFrameUtils._
+import org.reactorlabs.jshealth.util._
+
+import scala.concurrent.Future
+import org.reactorlabs.jshealth.Main._
+import sqlContext.implicits._
 
 object Analysis  {
-  val storeLoc = "/Users/shabbirhussain/Data/project/AnalysisStorage"
-
-  import java.io.File
-  import java.nio.file.Paths
-  import org.apache.hadoop.fs.FileSystem
-  import org.apache.hadoop.fs.Path
-  import org.apache.hadoop.io.compress.BZip2Codec
-  import org.apache.spark.sql.{SQLContext, SparkSession, Column, DataFrame}
-  import breeze.util.BloomFilter
-  import org.apache.spark.sql
-  import org.apache.spark.sql.Row
-  import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType, Decimal}
-  import org.apache.spark.storage.StorageLevel
-  import org.apache.spark.sql.SaveMode
-
-  import org.apache.spark.sql.expressions.Window
-  import org.apache.spark.sql.functions._
-  import scala.collection.JavaConversions._
-  import scala.concurrent.Future
-  import scala.concurrent.ExecutionContext
-  @transient implicit val ec = ExecutionContext.global
-
-
-  sc.setLogLevel("ERROR")
-  sc.setCheckpointDir("%s/temp/checkpoints/".format(storeLoc))
-  sc.setLocalProperty("spark.cleaner.referenceTracking.cleanCheckpoints", "true")
-  sc.setLocalProperty("spark.checkpoint.compress", "true")
-  sc.setLocalProperty("spark.shuffle.spill.compress", "true")
-  sc.setLocalProperty("spark.rdd.compress", "true")
-
-  val sqlContext: SQLContext = spark.sqlContext
-  import sqlContext.implicits._
-
-
-  import java.nio.file.Paths
-  import breeze.util.BloomFilter
-  import org.apache.hadoop.io.compress.BZip2Codec
-  import org.apache.spark.sql.{Column, DataFrame, SaveMode}
-  import org.apache.spark.sql.functions._
-  import org.apache.spark.storage.StorageLevel
-  object DataFrameUtils extends Serializable {
-    implicit class DFWithExtraOperations(df: DataFrame) {
-      /** Creates a named checkpoint and returns reference to it. Ignores the saving if already exists.
-        *
-        * @param objName is the checkpoint object name.
-        * @return DataFrame reference from the checkpoint
-        */
-      def checkpoint(objName: String): DataFrame = {
-        def getMaskedColumnNames(columns: Seq[String]): Map[String, String] = columns.zipWithIndex.
-          map(x=> (x._1, x._1.replaceAll("[^a-zA-z0-9]", "_") + "#" + x._2)).toMap
-
-        val storePath = "%s/_sticky/%s".format(Paths.get(sc.getCheckpointDir.get).getParent.toString, objName)
-        val colMapping = getMaskedColumnNames(df.columns)
-
-        val fs = FileSystem.get(sc.hadoopConfiguration)
-        val hadoopPath = new Path(storePath)
-        if (fs.exists(hadoopPath) && fs.getContentSummary(hadoopPath).getFileCount == 0)
-          fs.delete(hadoopPath, true)
-        println(storePath)
-
-        df.
-          withColumnsRenamed(colMapping).
-          write.
-          option("codec", classOf[BZip2Codec].getName).
-          mode(SaveMode.Ignore).
-          save(storePath)
-
-        sqlContext.
-          read.load(storePath).
-          withColumnsRenamed(colMapping.map(_.swap))
-      }
-
-      /** Performs column renaming in bulk.
-        *
-        * @param colMapping is the input to source to destination column mapping.
-        * @return DataFrame with specified columns renamed.
-        */
-      def withColumnsRenamed(colMapping: Map[String, String]): DataFrame = {
-        var newDf = df
-        colMapping.foreach(x=> newDf = newDf.withColumnRenamed(x._1, x._2))
-        newDf
-      }
-
-      /** Generates a seq of bloom filters for the columns specified.
-        *
-        * @param cols              is the seq of columns to generate filters for.
-        * @param falsePositiveRate is the maximum number of false positives.
-        * @return An indexed sequence of bloom filters in the order of the columns specified.
-        */
-      def makeBloomFilter(cols: Seq[Column], falsePositiveRate: Double = 0.001)
-      : Seq[BloomFilter[String]] = {
-        val temp = df.select(cols: _*).distinct.persist(StorageLevel.MEMORY_ONLY)
-        val stats = temp.select(temp.columns.map(c => approx_count_distinct(c, rsd = 0.1).as(c)): _*).collect()(0)
-        val rng = cols.indices
-
-        val bloomFilters = temp.rdd.mapPartitions(y => {
-          val bf = rng.map(i => BloomFilter.optimallySized[String](stats.getLong(i), falsePositiveRate))
-          y.foreach(row => rng.foreach(i => bf(i) += row.getAs[String](i)))
-          Iterator(bf)
-        }).reduce(_.zip(_).map(u => u._1 | u._2))
-
-        temp.unpersist(blocking = false)
-        bloomFilters
-      }
-    }
-  }
-
-  import DataFrameUtils._
-
-  def read(path: String, split: String) : DataFrame = {
-    val customSchema = StructType(Array(
-      StructField("REPO_OWNER",   StringType, nullable = false),
-      StructField("REPOSITORY",   StringType, nullable = false),
-      StructField("GIT_PATH",     StringType, nullable = false),
-      StructField("HASH_CODE",    StringType, nullable = true),
-      StructField("COMMIT_TIME",  LongType,   nullable = false)))
-
-    sqlContext.read.format("csv").
-      option("delimiter",",").option("quote","\"").schema(customSchema).
-      load(path).distinct.
-      filter($"REPO_OWNER".isNotNull && $"REPOSITORY".isNotNull && $"GIT_PATH".isNotNull && $"COMMIT_TIME".isNotNull).
-      withColumn("COMMIT_TIME", $"COMMIT_TIME".cast(sql.types.LongType))
-  }
-
-  def runInBg[R](block: => R): Future[R] = {
-    sc.setLocalProperty("spark.scheduler.pool", "bg")
-    val res = Future{block}
-//    sc.setLocalProperty("spark.scheduler.pool", null)
-    res
-  }
-
-  @transient val wHash = Window.partitionBy("HASH_CODE")
-  @transient val wHashTimeAsc = wHash.orderBy($"COMMIT_TIME")
-  @transient val wPathTimeDsc = Window.partitionBy("REPO_OWNER", "REPOSITORY", "GIT_PATH").orderBy($"COMMIT_TIME".desc)
-  val allData = read("/Users/shabbirhussain/Google Drive/NEU/Notes/CS 8678 Project/Déjà vu Episode II - Attack of The Clones/Data/FILE_HASH_HISTORY/*/*/", "fht").
-    withColumn("HEAD_COMMIT_TIME", first("COMMIT_TIME").over(wPathTimeDsc)).
-    withColumn("HEAD_HASH_CODE"  , first("HASH_CODE"  ).over(wPathTimeDsc)).
-    select($"REPO_OWNER",
-      $"REPOSITORY",
-      $"GIT_PATH",
-      $"HASH_CODE",
-      $"COMMIT_TIME",
-      $"HEAD_COMMIT_TIME",
-      $"HEAD_HASH_CODE",
-      first("REPO_OWNER" ).over(wHashTimeAsc).as("O_REPO_OWNER"),
-      first("REPOSITORY" ).over(wHashTimeAsc).as("O_REPOSITORY"),
-      first("GIT_PATH"   ).over(wHashTimeAsc).as("O_GIT_PATH"),
-      first("COMMIT_TIME").over(wHashTimeAsc).as("O_COMMIT_TIME"),
-      first("HEAD_HASH_CODE"  ).over(wHashTimeAsc).as("O_HEAD_HASH_CODE"),
-      first("HEAD_COMMIT_TIME").over(wHashTimeAsc).as("O_HEAD_COMMIT_TIME"),
-      when(count("COMMIT_TIME").over(wHash) === 1, lit(true)).as("IS_UNIQUE")
-    ).
-    repartition($"REPO_OWNER", $"REPOSITORY", $"GIT_PATH").
-    checkpoint("allData")
+  val allData: DataFrame = _
 
   // List all min timestamp commit per hash.
   val orig = allData.
@@ -412,25 +271,19 @@ object Analysis  {
   ///////////////////////////////////////////////////////////////////////////////////////////////////////
   // Count unique files in the head.
   val (allPathsCount, origPathsCount, copyPathsCount) = {
-    val allPathsCount = Future{
-      allData.
+    val allPathsCount = allData.
         filter($"HASH_CODE".isNotNull).                       // Paths which aren't deleted
         filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME").       // Head only
         select("REPO_OWNER", "REPOSITORY", "GIT_PATH").distinct.count
-    }
 
-    val origPathsCount = Future{
-      orig.
+    val origPathsCount = orig.
         filter($"O_COMMIT_TIME" === $"O_HEAD_COMMIT_TIME"). // Head only
         select($"O_REPO_OWNER", $"O_REPOSITORY", $"O_GIT_PATH", $"IS_UNIQUE").distinct.
         groupBy("IS_UNIQUE").count.collect
-    }
 
-    val copyPathsCount = Future{
-      copy.
+    val copyPathsCount = copy.
         filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME").       // Head only
         select("REPO_OWNER", "REPOSITORY", "GIT_PATH").distinct.count
-    }
 
     (allPathsCount, origPathsCount, copyPathsCount)
   }

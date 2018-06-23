@@ -1,7 +1,10 @@
 package org.reactorlabs.jshealth
 
 import java.io.File
-import java.nio.file.Paths
+
+import org.apache.spark.sql.DataFrame
+import org.reactorlabs.jshealth.Main._
+import org.reactorlabs.jshealth.models.Schemas
 
 /**
   * @author shabbirahussain
@@ -27,5 +30,13 @@ package object util {
         .filter(_.isDirectory)
         .flatMap(recursiveListFiles)
       )
+  }
+
+  def read(path: String, split: Schemas.Value): DataFrame = {
+    val meta = Schemas.asMap(key = split)
+    sqlContext.read
+      .schema(meta._1)
+      .load("%s/data/*/%s/".format(path, split))
+      .dropDuplicates(meta._2)
   }
 }

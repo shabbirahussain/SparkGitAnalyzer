@@ -1,13 +1,9 @@
 package org.reactorlabs.jshealth.util
 
-import java.io.File
-
-import org.reactorlabs.jshealth.analysis.Analysis.sqlContext
-import org.reactorlabs.jshealth.Main.sc
-import org.reactorlabs.jshealth.util
-import java.nio.file.Paths
+import org.reactorlabs.jshealth.Main._
 
 import breeze.util.BloomFilter
+import java.nio.file.Paths
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.hadoop.io.compress.BZip2Codec
 import org.apache.spark.sql.{Column, DataFrame, SaveMode}
