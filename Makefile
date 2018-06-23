@@ -1,4 +1,4 @@
-RUNTIME_JARS=commons-csv-1.5.jar,commons-cli-1.2.jar
+RUNTIME_JARS=commons-csv-1.5.jar
 
 # ------------------------------------
 # Do not edit! Local config variables.
@@ -21,7 +21,7 @@ FULL_RUNTIME_JARS=${LIB_PATH}/$(subst ${COMMA},${COMMA}${LIB_PATH}/,${RUNTIME_JA
 build: clean install_deps copy_resources
 	mkdir -p "target/artifacts"
 	mkdir -p "target/classes/main/resources/"
-	scalac -cp "./${LIB_PATH}/*" \
+	scalac -cp "./${LIB_PATH}*" \
 		-d target/classes \
 		src/main/scala/org/reactorlabs/jshealth/**/*.scala \
 		src/main/scala/org/reactorlabs/jshealth/*.scala
@@ -34,7 +34,7 @@ copy_resources:
 	mkdir -p "target/bundle/dependency"
 	rm -rf "${CLASSES_PATH}"
 	mkdir -p "${CLASSES_PATH}"
-	cp ${LIB_PATH}{${RUNTIME_JARS}} "target/bundle/dependency/"
+	cp ${LIB_PATH}${RUNTIME_JARS} "target/bundle/dependency/"
 	cp -r src/main/resources/ ${EXTRA_RESOURCES_PATH}
 
 run: ss
