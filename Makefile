@@ -1,5 +1,9 @@
 RUNTIME_JARS=commons-csv-1.5.jar
 
+PRL_USER=hshabbir
+PRL_MACHINE=${PRL_USER}@prl1c
+PRL_DB_NAME=hshabbir_reactorlabs
+
 # ------------------------------------
 # Do not edit! Local config variables.
 # ------------------------------------
@@ -14,6 +18,10 @@ RUNTIME_LIB_PATH=${BUNDLE_DIR}dependency/
 
 CLASSES_PATH=target/classes/
 EXTRA_RESOURCES_PATH=${BUNDLE_DIR}resources/
+
+DEPLOYABLE_DIR=target/deployable/
+DEPLOYABLE_TAR=target/deployable.tar
+DEPLOYABLE_PAYLOAD_DIR=payload/
 
 COMMA=,
 FULL_RUNTIME_JARS=${LIB_PATH}/$(subst ${COMMA},${COMMA}${LIB_PATH}/,${RUNTIME_JARS}),${JAR_NAME}
@@ -56,3 +64,19 @@ install_deps:
 clean:
 	-rm -rf target/*
 
+create_deployable: build
+	rm -rf ${DEPLOYABLE_DIR}
+	mkdir -p ${DEPLOYABLE_DIR}${BUNDLE_DIR}
+	cp Makefile ${DEPLOYABLE_DIR}
+	cp -r ${BUNDLE_DIR} ${DEPLOYABLE_DIR}${BUNDLE_DIR}
+	-cp -r ${DEPLOYABLE_PAYLOAD_DIR} ${DEPLOYABLE_DIR}${DEPLOYABLE_PAYLOAD_DIR}
+	tar -C ${DEPLOYABLE_DIR} -cvf target/deployable.tar .
+	rm -rf ${DEPLOYABLE_DIR}
+# =================================================================================
+# PRL Specific scripts and configuration
+# ---------------------------------------------------------------------------------
+prl_deploy: create_deployable
+	scp ${DEPLOYABLE_TAR} ${PRL_MACHINE}:/home/${PRL_USER}/SparkGitAnalyzer
+
+prl_tunnel:
+	ssh -L 9040:localhost:4040 ${PRL_MACHINE}
