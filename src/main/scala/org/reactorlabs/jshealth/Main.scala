@@ -38,7 +38,7 @@ object Main extends Serializable {
   sc.setLocalProperty("spark.checkpoint.compress", "true")
   sc.setLocalProperty("spark.shuffle.spill.compress", "true")
   sc.setLocalProperty("spark.rdd.compress", "true")
-  sc.setLogLevel("WARN")
+  sc.setLogLevel("ERROR")
 
 
   @transient implicit val ec: ExecutionContextExecutor = ExecutionContext.global

@@ -66,5 +66,5 @@ val copy = allData.drop("IS_UNIQUE").
 val headCopy = copy.filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME")
 
 allData.describe()
-orig.describe()
-copy.describe()
+//orig.describe()
+//copy.describe()

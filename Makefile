@@ -45,7 +45,7 @@ copy_resources:
 	cp ${LIB_PATH}${RUNTIME_JARS} "target/bundle/dependency/"
 	cp -r src/main/resources/ ${EXTRA_RESOURCES_PATH}
 
-run: ss
+run: prl_deploy prl_tunnel
 
 ss:
 	spark-shell -i ${STARTUP_FILE} \
@@ -72,6 +72,7 @@ create_deployable: build
 	-cp -r ${DEPLOYABLE_PAYLOAD_DIR} ${DEPLOYABLE_DIR}${DEPLOYABLE_PAYLOAD_DIR}
 	tar -C ${DEPLOYABLE_DIR} -cvf target/deployable.tar .
 	rm -rf ${DEPLOYABLE_DIR}
+
 # =================================================================================
 # PRL Specific scripts and configuration
 # ---------------------------------------------------------------------------------
@@ -79,4 +80,17 @@ prl_deploy: create_deployable
 	scp ${DEPLOYABLE_TAR} ${PRL_MACHINE}:/home/${PRL_USER}/SparkGitAnalyzer
 
 prl_tunnel:
-	ssh -L 9040:localhost:4040 ${PRL_MACHINE}
+	-open http://localhost:9040/jobs/
+	-xdg-open http://localhost:9040/jobs/
+	ssh -L 9040:localhost:4040 ${PRL_MACHINE} -t '\
+		. /home/hshabbir/.bash_profile \
+	    echo $$PATH;\
+		cd ~/SparkGitAnalyzer;\
+		tar -xvf deployable.tar;\
+		make ss;\
+		bash -l;\
+	'
+prl_ssh:
+	ssh ${PRL_MACHINE}
+
+
