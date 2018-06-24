@@ -8,7 +8,7 @@ PRL_DB_NAME=hshabbir_reactorlabs
 # Do not edit! Local config variables.
 # ------------------------------------
 
-STARTUP_FILE=src/main/scala/org/reactorlabs/jshealth/analysis/queries/__init__.scala
+STARTUP_FILE=queries/__init__.scala
 
 BUNDLE_DIR=target/bundle/
 JAR_NAME=${BUNDLE_DIR}task.jar
@@ -48,7 +48,7 @@ copy_resources:
 run: prl_deploy prl_tunnel
 
 ss:
-	spark-shell -i ${STARTUP_FILE} \
+	spark-shell -i ${EXTRA_RESOURCES_PATH}${STARTUP_FILE} \
 		--driver-memory 300G --executor-memory 300G \
     	--master local[*] \
 		--files "${EXTRA_RESOURCES_PATH}conf/config-defaults.properties" \

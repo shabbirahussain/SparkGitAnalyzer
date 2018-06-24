@@ -9,10 +9,9 @@ import org.reactorlabs.jshealth.models._
 import org.reactorlabs.jshealth.util.DataFrameUtils._
 import org.reactorlabs.jshealth.util._
 import scala.concurrent.Future
-import org.reactorlabs.jshealth.Main._
+import org.reactorlabs.jshealth.Main.{sqlContext, fileStorePath, sc}
 import sqlContext.implicits._
 
-sc.setCheckpointDir("%s/checkpoints/".format(analysisStoreLoc))
 
 @transient val wHash = Window.partitionBy("HASH_CODE")
 @transient val wHashTimeAsc = wHash.orderBy($"COMMIT_TIME")
@@ -65,6 +64,6 @@ val copy = allData.drop("IS_UNIQUE").
   filter(!($"O_HEAD_HASH_CODE".isNull && $"O_HEAD_COMMIT_TIME" === $"COMMIT_TIME")) // Ignore immediate moves
 val headCopy = copy.filter($"COMMIT_TIME" === $"HEAD_COMMIT_TIME")
 
-allData.describe()
+//allData.describe()
 //orig.describe()
 //copy.describe()

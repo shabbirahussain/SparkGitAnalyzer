@@ -15,7 +15,7 @@ import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
 object Main extends Serializable {
   val logger:Logger = Logger.getLogger("project.default.logger")
 
-  val spark: SparkSession = SparkSession
+  private val spark: SparkSession = SparkSession
     .builder()
     .appName("ReactorLabs Git Miner")
     .getOrCreate()
@@ -39,6 +39,8 @@ object Main extends Serializable {
   sc.setLocalProperty("spark.shuffle.spill.compress", "true")
   sc.setLocalProperty("spark.rdd.compress", "true")
   sc.setLogLevel("ERROR")
+  sc.setCheckpointDir("%s/checkpoints/".format(analysisStoreLoc))
+  spark.conf.set("spark.kryoserializer.buffer.max.mb", 512)
 
 
   @transient implicit val ec: ExecutionContextExecutor = ExecutionContext.global
