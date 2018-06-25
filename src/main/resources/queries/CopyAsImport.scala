@@ -177,7 +177,11 @@ val copyAsImportCount = copyAsImportExamples.
       otherwise("OTHERS")
   ).
   groupBy("IS_COPY_AS_IMPORT", "PACKAGER_MANAGER_NAME").
-  agg(sum("count(crc32(FILE_NAME))")).collect
+  agg(sum("count(crc32(FILE_NAME))")).
+  orderBy($"IS_COPY_AS_IMPORT", $"PACKAGER_MANAGER_NAME").
+  cache
+
+copyAsImportCount.show
 
 
 /*
@@ -271,8 +275,7 @@ val folders = copyAsImportExamples.
   toDF("FOLDER").
   groupBy("FOLDER").count.filter($"COUNT">1000).
   //    persist().
-  orderBy($"COUNT".desc).
-  show
+  orderBy($"COUNT".desc)
 
 
 val unidentifiedNodeCopies = headCopy. // Pick head paths only.
