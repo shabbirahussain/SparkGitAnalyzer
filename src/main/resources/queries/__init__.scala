@@ -4,6 +4,7 @@ import breeze.util.BloomFilter
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
 import org.apache.spark.storage.StorageLevel
 import org.reactorlabs.jshealth.models._
 import org.reactorlabs.jshealth.util.DataFrameUtils._

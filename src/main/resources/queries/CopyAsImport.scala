@@ -4,7 +4,7 @@ import breeze.util.BloomFilter
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types.IntegerType
+import org.apache.spark.sql.types._
 import org.apache.spark.storage.StorageLevel
 import org.reactorlabs.jshealth.models._
 import org.reactorlabs.jshealth.util.DataFrameUtils._
@@ -35,7 +35,7 @@ val allFolderHashBF = headCopy.makeBloomFilter(Seq($"O_REPO_OWNER", $"O_REPOSITO
   orderBy($"COMMIT_TIME")
 @transient val wRowNumTimeAsc = Window.
   partitionBy($"sum(crc32(HASH_CODE))", $"sum(crc32(FILE_NAME))", $"count(crc32(FILE_NAME))").
-  orderBy($"COMMIT_TIME".desc)
+  orderBy($"COMMIT_TIME")
 
 // Get all the paths fingerprint present in the all repo upto a max(original commit point) used by the copier.
 val rankedOrigFolderHash = allData.
@@ -68,7 +68,10 @@ val rankedOrigFolderHash = allData.
   withColumn("crc32(HASH_CODE)", $"crc32(HASH_CODE)" - $"crc32(PREV_HASH_CODE)").
   // Fingerprint all additions in a commit for every folder.
   groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "FOLDER").
-  agg(sum($"crc32(HASH_CODE)"), sum($"crc32(FILE_NAME)"), sum(signum($"crc32(FILE_NAME)").cast(IntegerType))).
+  agg(sum($"crc32(HASH_CODE)")
+    , sum($"crc32(FILE_NAME)")
+    , sum(signum($"crc32(FILE_NAME)").cast(IntegerType)).as("sum(signum(crc32(FILE_NAME)))")
+  ).
   // Do cumulative sum of fingerprints.
   select(
     $"REPO_OWNER", $"REPOSITORY", $"COMMIT_TIME", $"FOLDER",
@@ -93,6 +96,89 @@ val rankedOrigFolderHash = allData.
   ).
   checkpoint("rankedOrigFolderHash").
   cache()
+
+
+var copyAsImportExamples = headCopy. // Pick head paths only.
+  select($"REPO_OWNER", $"REPOSITORY", $"GIT_PATH", $"COMMIT_TIME", crc32($"HASH_CODE")).
+  distinct.
+  // Extract last level folder to aggregate repository.
+  withColumn("FOLDER", getParentFileName($"GIT_PATH")).
+  withColumn("crc32(FILE_NAME)", crc32(getFileName($"GIT_PATH"))).
+  groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "FOLDER").
+  agg(sum("crc32(HASH_CODE)")
+    , sum("crc32(FILE_NAME)")
+    , count("crc32(FILE_NAME)")).
+  checkpoint("copyFolderHash").
+  select($"REPO_OWNER"
+    , $"REPOSITORY"
+    , $"COMMIT_TIME"
+    , $"FOLDER"
+    , $"sum(crc32(HASH_CODE))"
+    , $"sum(crc32(FILE_NAME))"
+    , $"count(crc32(FILE_NAME))"
+    , lit(null).as("O_REPO_OWNER")
+    , lit(null).as("O_REPOSITORY")
+    , lit(null).as("O_FOLDER")
+    , lit(null).as("O_COMMIT_TIME")
+  ).cache
+
+// Do multi-pass join to find if all the paths from original at the time of copy exists in the copied folder.
+for(rng <- Seq((1, 1), (2, 10), (11, 100))){
+  copyAsImportExamples =
+    copyAsImportExamples.as("A").
+      join(rankedOrigFolderHash.
+        filter($"ROW_NUM".between(rng._1, rng._2)).
+        as("B")
+        , joinType = "LEFT_OUTER"
+        , joinExprs =
+            $"A.O_COMMIT_TIME".isNull &&
+            $"A.sum(crc32(HASH_CODE))"   === $"B.sum(crc32(HASH_CODE))"   &&
+            $"A.sum(crc32(FILE_NAME))"   === $"B.sum(crc32(FILE_NAME))"   &&
+            $"A.count(crc32(FILE_NAME))" === $"B.count(crc32(FILE_NAME))" &&
+            $"A.COMMIT_TIME" > $"B.O_COMMIT_TIME" &&
+            ($"A.REPO_OWNER" =!= $"B.O_REPO_OWNER" || $"A.REPOSITORY" =!= $"B.O_REPOSITORY")
+      ).
+      select($"A.REPO_OWNER"
+        , $"A.REPOSITORY"
+        , $"A.COMMIT_TIME"
+        , $"A.FOLDER"
+        , $"A.sum(crc32(HASH_CODE))"
+        , $"A.sum(crc32(FILE_NAME))"
+        , $"A.count(crc32(FILE_NAME))"
+        , coalesce($"A.O_REPO_OWNER" , $"B.O_REPO_OWNER" ).as("O_REPO_OWNER")
+        , coalesce($"A.O_REPOSITORY" , $"B.O_REPOSITORY" ).as("O_REPOSITORY")
+        , coalesce($"A.O_FOLDER"     , $"B.O_FOLDER"     ).as("O_FOLDER")
+        , coalesce($"A.O_COMMIT_TIME", $"B.O_COMMIT_TIME").as("O_COMMIT_TIME")
+      ).
+      dropDuplicates("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "FOLDER", "count(crc32(FILE_NAME))").
+      cache
+
+  println("After joining between %s count of manual = %d".
+    format(rng, copyAsImportExamples.filter($"O_COMMIT_TIME".isNull).count))
+}
+copyAsImportExamples = copyAsImportExamples.
+//  drop("sum(crc32(HASH_CODE))", "sum(crc32(FILE_NAME))").
+  checkpoint("copyAsImportExamples")
+
+
+val copyAsImportCount = copyAsImportExamples.
+  select(
+    $"REPO_OWNER",
+    $"REPOSITORY",
+    $"FOLDER",
+    $"count(crc32(FILE_NAME))",
+    $"O_REPO_OWNER".isNotNull.as("IS_COPY_AS_IMPORT")
+  ).distinct.
+  withColumn("PACKAGER_MANAGER_NAME",
+    when($"FOLDER".contains("www/"), "WWW").
+      when($"FOLDER".contains("node_modules/"), "NPM").
+      when($"FOLDER".contains("bower_components/"), "BOWER").
+      when($"FOLDER".contains(".bower-cache/"), "BOWER")
+      otherwise("OTHERS")
+  ).
+  groupBy("IS_COPY_AS_IMPORT", "PACKAGER_MANAGER_NAME").
+  agg(sum("count(crc32(FILE_NAME))")).collect
+
 
 /*
 val temp = allData.filter($"REPO_OWNER" === "2gis" && $"REPOSITORY" === "mapsapi").cache
@@ -166,80 +252,6 @@ temp1.
 
 allFolderHash.filter($"REPO_OWNER" === "2gis" && $"REPOSITORY" === "mapsapi" && $"FOLDER" === "src/DGLayer/test")
 */
-
-var copyAsImportExamples = headCopy. // Pick head paths only.
-  select($"REPO_OWNER", $"REPOSITORY", $"GIT_PATH", $"COMMIT_TIME", crc32($"HASH_CODE")).
-  distinct.
-  // Extract last level folder to aggregate repository.
-  withColumn("FOLDER", getParentFileName($"GIT_PATH")).
-  withColumn("crc32(FILE_NAME)", crc32(getFileName($"GIT_PATH"))).
-  groupBy("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "FOLDER").
-  agg(sum("crc32(HASH_CODE)"), sum("crc32(FILE_NAME)"), count("crc32(FILE_NAME)")).
-  checkpoint("copyFolderHash").
-  select($"REPO_OWNER"
-    , $"REPOSITORY"
-    , $"COMMIT_TIME"
-    , $"FOLDER"
-    , $"sum(crc32(HASH_CODE))"
-    , $"sum(crc32(FILE_NAME))"
-    , $"count(crc32(FILE_NAME))"
-    , lit(null).as("O_REPO_OWNER")
-    , lit(null).as("O_REPOSITORY")
-    , lit(null).as("O_FOLDER")
-    , lit(null).as("O_COMMIT_TIME")
-  )
-
-// Do multi-pass join to find if all the paths from original at the time of copy exists in the copied folder.
-for(rng <- Seq((1, 1), (2, 50), (51, Integer.MAX_VALUE))){
-  copyAsImportExamples =
-    copyAsImportExamples.as("A").
-      join(rankedOrigFolderHash.
-        filter($"ROW_NUM".between(rng._1, rng._2)).
-        hint("broadcast").
-        as("B")
-        , joinType = "LEFT_OUTER"
-        , joinExprs =
-            $"A.O_COMMIT_TIME".isNull &&
-            $"A.sum(crc32(HASH_CODE))"   === $"B.sum(crc32(HASH_CODE))"   &&
-            $"A.sum(crc32(FILE_NAME))"   === $"B.sum(crc32(FILE_NAME))"   &&
-            $"A.count(crc32(FILE_NAME))" === $"B.count(crc32(FILE_NAME))" &&
-            $"A.COMMIT_TIME" > $"B.O_COMMIT_TIME" &&
-            ($"A.REPO_OWNER" =!= $"B.O_REPO_OWNER" || $"A.REPOSITORY" =!= $"B.O_REPOSITORY")
-      ).
-      select($"A.REPO_OWNER"
-        , $"A.REPOSITORY"
-        , $"A.COMMIT_TIME"
-        , $"A.FOLDER"
-        , coalesce($"A.O_REPO_OWNER" , $"B.O_REPO_OWNER" ).as("O_REPO_OWNER")
-        , coalesce($"A.O_REPOSITORY" , $"B.O_REPOSITORY" ).as("O_REPOSITORY")
-        , coalesce($"A.O_FOLDER"     , $"B.O_FOLDER"     ).as("O_FOLDER")
-        , coalesce($"A.O_COMMIT_TIME", $"B.O_COMMIT_TIME").as("O_COMMIT_TIME")
-        , $"A.count(crc32(FILE_NAME))"
-      ).
-      dropDuplicates("REPO_OWNER", "REPOSITORY", "COMMIT_TIME", "FOLDER", "count(crc32(FILE_NAME))")
-}
-copyAsImportExamples = copyAsImportExamples.checkpoint("copyAsImportExamples")
-
-
-val copyAsImportCount = copyAsImportExamples.
-  select(
-    $"REPO_OWNER",
-    $"REPOSITORY",
-    $"FOLDER",
-    $"count(crc32(FILE_NAME))",
-    $"O_REPO_OWNER".isNotNull.as("IS_COPY_AS_IMPORT")
-  ).distinct.
-  withColumn("PACKAGER_MANAGER_NAME",
-    when($"FOLDER".contains("www/"), "WWW").
-      when($"FOLDER".contains("node_modules/"), "NPM").
-      when($"FOLDER".contains("bower_components/"), "BOWER").
-      when($"FOLDER".contains(".bower-cache/"), "BOWER")
-      otherwise("OTHERS")
-  ).
-  groupBy("IS_COPY_AS_IMPORT", "PACKAGER_MANAGER_NAME").
-  agg(sum("count(crc32(FILE_NAME))")).collect
-
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Extra validations
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
